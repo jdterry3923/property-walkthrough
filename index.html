@@ -125,7 +125,7 @@ const CRIT=[
 // ─── SUBMIT TO SHAREPOINT (via Power Automate — NO sign-in) ──────────
 // The tool POSTs the report + photos to a private Power Automate flow URL;
 // the flow writes everything into the 3923 Operations SharePoint. No login for the user.
-const FLOW_URL="PASTE-POWER-AUTOMATE-URL-HERE";      // ► paste the flow's HTTP POST URL here
+const FLOW_URL="https://default6adeec311afd44a78087ac761ad15a.a4.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/27/workflows/69e2511caa6f4954a26802906ed4b769/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=0HB8iFYrxe89JBfCaP9i5hp3KfHd4ipJz8ZaKcgq9hs";      // flow HTTP POST URL
 const FLOW_FOLDER="/3923 Property Walkthroughs";     // (informational) target folder in SharePoint
 function flowReady(){return FLOW_URL && FLOW_URL.indexOf("PASTE")===-1;}
 function buildPayload(){
