@@ -131,7 +131,10 @@ function flowReady(){return FLOW_URL && FLOW_URL.indexOf("PASTE")===-1;}
 function buildPayload(){
   const photoArr=[];
   Object.keys(photos).forEach(ctx=>{(photos[ctx]||[]).forEach((ph,i)=>{photoArr.push({name:ctx+"_"+(i+1)+".jpg",b64:(ph.data||"").split(",")[1]||""});});});
-  return {property:st.info.property,brand:st.info.brand,date:st.info.date,inspector:st.info.inspector,gm:st.info.gm,rmgr:st.info.rmgr,score:tot(),crit:st.crit,flagCount:fl().length,reportText:genRpt(),info:st.info,ratings:st.rat,notes:st.notes,actions:st.acts,rooms:st.rooms,assessments:st.assess,followUp:st.fu,flags:fl(),photos:photoArr};
+  // property & date become SharePoint folder names → must be sanitized (no trailing space, no illegal chars, never blank)
+  const propSeg=safeSeg(st.info.property)||"Unspecified Property";
+  const dateSeg=safeSeg(st.info.date)||new Date().toISOString().split("T")[0];
+  return {property:propSeg,date:dateSeg,brand:st.info.brand,inspector:st.info.inspector,gm:st.info.gm,rmgr:st.info.rmgr,score:tot(),crit:st.crit,flagCount:fl().length,reportText:genRpt(),info:st.info,ratings:st.rat,notes:st.notes,actions:st.acts,rooms:st.rooms,assessments:st.assess,followUp:st.fu,flags:fl(),photos:photoArr};
 }
 
 // ─── STATE ───────────────────────────────────────────
@@ -148,6 +151,9 @@ function svp(){try{localStorage.setItem("wt5p",JSON.stringify(photos));}catch(e)
 function U(u){Object.assign(st,u);sv();R();}
 function toast(m){const t=document.getElementById("toast");t.textContent=m;t.classList.add("show");setTimeout(()=>t.classList.remove("show"),2000);}
 function E(s){return(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}
+// Sanitize a value used as a SharePoint folder/file segment: strip illegal chars (# % * : < > ? / \ | "),
+// collapse whitespace, trim, and drop trailing dots/spaces (SharePoint rejects those). Returns "" if nothing left.
+function safeSeg(s){return (s||"").replace(/[\\/#%*:<>?|"]/g,"-").replace(/\s+/g," ").trim().replace(/[.\s]+$/,"");}
 
 // ─── SCORING ─────────────────────────────────────────
 function rsc(i){let s=0,t=0;for(let j=0;j<RI.length;j++){const r=st.rat[`r${i}-${j}`];if(r){s+=r;t++;}}return{s,t};}
@@ -384,6 +390,8 @@ function safeName(s){return(s||"").replace(/[\\/:*?"<>|]/g,"-").trim();}
 
 // ─── UPLOAD TO SHAREPOINT ────────────────────────────
 async function uploadAll(){
+  // A property name is required — it becomes the SharePoint folder. Block submit (don't send a broken path).
+  if(!safeSeg(st.info.property)){toast("⚠ Enter a Property Name on the Setup tab before submitting");U({v:'setup'});return;}
   const prog=document.getElementById("uprog");
   const setBar=(w,msg)=>{if(prog)prog.innerHTML=`<div class="upload-progress"><div class="upload-bar" style="width:${w}%"></div></div><div style="text-align:center;font-size:11px;color:#888;margin-top:4px">${msg||""}</div>`;};
   const payload=buildPayload();
