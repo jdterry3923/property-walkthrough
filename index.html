@@ -110,6 +110,20 @@ const SEC=[
 ];
 const RI=["Door, lock, hardware, peephole","First impression — smell, temp, cleanliness","Carpet / flooring condition","Walls, ceiling, baseboards","Bed — linens, mattress, pillows, frame","Furniture — nightstands, desk, dresser","TV, remote, programming","HVAC — functional, quiet, filter","Windows, blinds, curtains","Closet — hangers, iron, safe, rack","Lighting — all fixtures, outlets, USB","Bathroom — cleanliness, fixtures, function","Grout, caulking, tile condition","Amenities — toiletries, towels, dryer","Mini-fridge / coffee maker","Odors — none present","In-room collateral current"];
 const AQ=["What stood out positively?","What would embarrass us in front of an investor?","Worse since last visit?","Improved since last visit?","Where is the GM winning?","Where does the GM need support?","Biggest threat to guest satisfaction?","Fix before we leave today:"];
+// Fixed pick-lists for the Setup dropdowns (prevents typo/trailing-space/blank folder names). Brand auto-derives from property.
+const PROPS=[
+ {name:"Home2 Suites by Hilton Amarillo",brand:"Hilton"},
+ {name:"Hyatt Place Amarillo West",brand:"Hyatt"},
+ {name:"Tru by Hilton Amarillo West",brand:"Hilton"},
+ {name:"My Place Amarillo",brand:"My Place"},
+ {name:"My Place Lubbock",brand:"My Place"},
+ {name:"Courtyard Amarillo Downtown",brand:"Marriott"}
+];
+const BRANDS=["Hilton","Hyatt","Marriott","My Place"];
+const GMS=["Maria Garcia","April Duran","Lacey Wortman","Alissa Foster","JJ Arredondo","Cindy Augustine"];
+const AGMS=GMS.concat(["Sheri Vasquez","Taryn West"]);
+const RMS=["Caroline Campsey"];
+const INSPECTORS=AGMS.concat(RMS,["John David Terry","Kevin Nelson","Ginger Nelson","Mark Johnson","Trevor Richardson"]);
 
 // Weighted scoring + critical auto-fail (mirrors the weekly tool). Sections score 1–5; weighted into %.
 const WEIGHTS={ext:10,lob:20,fb:10,fit:5,cor:15,boh:20,rooms:20};
@@ -254,9 +268,18 @@ function R(){
 // ─── VIEWS ───────────────────────────────────────────
 function vSetup(){
   let h=`<div class="pg"><div style="text-align:center;margin-bottom:16px"><div style="font-size:22px;font-weight:800;color:var(--navy)">Property Walkthrough</div><div style="font-size:12px;color:var(--gold);font-weight:600">3923 Management · Semi-Annual</div></div>`;
-  [["property","Property Name"],["brand","Brand"],["date","Date","date"],["gm","General Manager"],["agm","Accountability Partner GM"],["rmgr","Regional Manager"],["inspector","Your Name"],["occ","Today's Occupancy"],["qa","Last Walkthrough Score / Date"]].forEach(([k,l,t])=>{h+=`<div class="fl"><label>${l}</label><input type="${t||"text"}" value="${E(st.info[k])}" oninput="ui('${k}',this.value)"></div>`;});
-  h+=`<div style="text-align:center;margin:8px 0 2px;font-size:10px;color:#bbb">No login needed — fill it out, then tap Submit on the Export tab.</div>`;
-  h+=`<button class="bt bn" style="margin-top:10px" onclick="U({v:'walk'})">Start Walkthrough →</button>`;
+  // Setup = all dropdowns (fixed lists) except Date/Occupancy/Last-Score which are values. Property also auto-fills Brand.
+  h+=`<div class="fl"><label>Property Name *</label><select onchange="selProp(this.value)"><option value="">— Select a property —</option>${PROPS.map(p=>`<option${st.info.property===p.name?" selected":""}>${E(p.name)}</option>`).join("")}</select></div>`;
+  h+=ddField("brand","Brand * (auto-fills from property)",BRANDS);
+  h+=`<div class="fl"><label>Date</label><input type="date" value="${E(st.info.date)}" oninput="ui('date',this.value)"></div>`;
+  h+=ddField("gm","General Manager *",GMS);
+  h+=ddField("agm","Accountability Partner GM",AGMS);
+  h+=ddField("rmgr","Regional Manager *",RMS);
+  h+=ddField("inspector","Your Name *",INSPECTORS);
+  h+=`<div class="fl"><label>Today's Occupancy</label><input type="text" inputmode="decimal" placeholder="e.g. 78%" value="${E(st.info.occ)}" oninput="ui('occ',this.value)"></div>`;
+  h+=`<div class="fl"><label>Last Walkthrough Score / Date</label><input type="text" value="${E(st.info.qa)}" oninput="ui('qa',this.value)"></div>`;
+  h+=`<div style="text-align:center;margin:8px 0 2px;font-size:10px;color:#bbb">* required. No login needed — fill it out, then tap Submit on the Export tab.</div>`;
+  h+=`<button class="bt bn" style="margin-top:10px" onclick="startWalk()">Start Walkthrough →</button>`;
   h+=`<button class="bt bo" style="margin-top:8px" onclick="resetAll()">Reset All Data</button>`;
   h+=`<div style="text-align:center;margin-top:12px;font-size:10px;color:#bbb">Data saves automatically to this device. Tap Submit when done to send the report + photos to SharePoint.</div></div>`;return h;
 }
@@ -358,6 +381,11 @@ function mAct(){const a=st.acts[st.ak]||{};let h=`<div class="mb" onclick="U({ak
 function rt(k,v){st.rat[k]=st.rat[k]===v?undefined:v;sv();R();}
 function rs(id,v){st.rat[id]=st.rat[id]===v?undefined:v;sv();R();}
 function ui(k,v){st.info[k]=v;sv();}
+function selProp(v){st.info.property=v;const p=PROPS.find(x=>x.name===v);st.info.brand=p?p.brand:"";sv();R();}
+function ddField(k,label,opts){return `<div class="fl"><label>${label}</label><select onchange="ui('${k}',this.value)"><option value="">— Select —</option>${opts.map(o=>`<option${st.info[k]===o?" selected":""}>${E(o)}</option>`).join("")}</select></div>`;}
+// Required before starting the walk: property, brand, GM, regional manager, your name.
+function setupMissing(){return [["property","Property Name"],["brand","Brand"],["gm","General Manager"],["rmgr","Regional Manager"],["inspector","Your Name"]].filter(([k])=>!safeSeg(st.info[k])).map(([,l])=>l);}
+function startWalk(){const m=setupMissing();if(m.length){toast("⚠ Required: "+m.join(", "));return;}U({v:'walk'});}
 function un(v){st.notes[st.nk]=v;sv();}
 function sn(id,v){st.notes[id]=v;sv();}
 function sa(id,v){if(!st.acts[id])st.acts[id]={};st.acts[id].bucket=st.acts[id].bucket===v?undefined:v;sv();R();}
