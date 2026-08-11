@@ -92,8 +92,7 @@ input,textarea,button,select{font-family:inherit}
 .authbtn{font-size:11px;padding:5px 12px;border-radius:6px;border:1px solid var(--gold);background:var(--gold);color:var(--navy);font-weight:700;cursor:pointer}
 .authbtn.out{background:#fff;color:#888;border-color:#ddd}
 </style>
-<!-- Microsoft Authentication Library (MSAL) — SharePoint upload; tool works offline without it. -->
-<script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@2.38.4/lib/msal-browser.min.js"></script>
+<!-- No sign-in required: Submit posts to a private Power Automate flow that writes to SharePoint. -->
 </head>
 <body>
 <div id="app" class="app"></div>
@@ -112,35 +111,17 @@ const SEC=[
 const RI=["Door, lock, hardware, peephole","First impression — smell, temp, cleanliness","Carpet / flooring condition","Walls, ceiling, baseboards","Bed — linens, mattress, pillows, frame","Furniture — nightstands, desk, dresser","TV, remote, programming","HVAC — functional, quiet, filter","Windows, blinds, curtains","Closet — hangers, iron, safe, rack","Lighting — all fixtures, outlets, USB","Bathroom — cleanliness, fixtures, function","Grout, caulking, tile condition","Amenities — toiletries, towels, dryer","Mini-fridge / coffee maker","Odors — none present","In-room collateral current"];
 const AQ=["What stood out positively?","What would embarrass us in front of an investor?","Worse since last visit?","Improved since last visit?","Where is the GM winning?","Where does the GM need support?","Biggest threat to guest satisfaction?","Fix before we leave today:"];
 
-// ─── MICROSOFT 365 / SHAREPOINT UPLOAD ───────────────
-// Semi-annual reports + photos upload to their OWN folder in the shared 3923 Operations library.
-const M365={
-  clientId:'d46c1f09-d5b9-4397-9b08-2a4bd1305232',   // Entra app "3923 RM Walkthrough"
-  tenantId:'6adeec31-1afd-44a7-8087-ac761ad15aa4',   // Nelsons Law tenant
-  scopes:['User.Read','Files.ReadWrite','Sites.ReadWrite.All'],
-  siteHostname:'nelsonslawfirm.sharepoint.com',
-  sitePath:'/sites/3923Operations',
-  folder:'/3923 Property Walkthroughs'               // separate from the weekly /3923 Walkthroughs
-};
-let msalApp=null,account=null,_driveRoot=null;
-function m365Ready(){return typeof msal!=='undefined'&&M365.clientId.indexOf('PASTE')===-1;}
-async function initM365(){
-  if(!m365Ready())return;
-  msalApp=new msal.PublicClientApplication({auth:{clientId:M365.clientId,authority:'https://login.microsoftonline.com/'+M365.tenantId,redirectUri:location.origin+location.pathname},cache:{cacheLocation:'localStorage'}});
-  await msalApp.initialize();
-  try{const r=await msalApp.handleRedirectPromise();if(r&&r.account)account=r.account;}catch(e){}
-  if(!account){const a=msalApp.getAllAccounts();if(a.length)account=a[0];}
+// ─── SUBMIT TO SHAREPOINT (via Power Automate — NO sign-in) ──────────
+// The tool POSTs the report + photos to a private Power Automate flow URL;
+// the flow writes everything into the 3923 Operations SharePoint. No login for the user.
+const FLOW_URL="PASTE-POWER-AUTOMATE-URL-HERE";      // ► paste the flow's HTTP POST URL here
+const FLOW_FOLDER="/3923 Property Walkthroughs";     // (informational) target folder in SharePoint
+function flowReady(){return FLOW_URL && FLOW_URL.indexOf("PASTE")===-1;}
+function buildPayload(){
+  const photoArr=[];
+  Object.keys(photos).forEach(ctx=>{(photos[ctx]||[]).forEach((ph,i)=>{photoArr.push({name:ctx+"_"+(i+1)+".jpg",b64:(ph.data||"").split(",")[1]||""});});});
+  return {property:st.info.property,brand:st.info.brand,date:st.info.date,inspector:st.info.inspector,gm:st.info.gm,rmgr:st.info.rmgr,score:tot(),flagCount:fl().length,reportText:genRpt(),info:st.info,ratings:st.rat,notes:st.notes,actions:st.acts,rooms:st.rooms,assessments:st.assess,followUp:st.fu,flags:fl(),photos:photoArr};
 }
-async function signIn(){
-  if(!msalApp){toast('Sign-in not available');return;}
-  try{const r=await msalApp.loginPopup({scopes:M365.scopes});account=r.account;R();toast('✓ Signed in');}
-  catch(e){try{await msalApp.loginRedirect({scopes:M365.scopes});}catch(e2){toast('Sign-in failed');}}
-}
-async function signOut(){try{await msalApp.logoutPopup({account});}catch(e){}account=null;R();}
-async function gtoken(){if(!msalApp||!account)return null;try{const r=await msalApp.acquireTokenSilent({scopes:M365.scopes,account});return r.accessToken;}catch(e){try{const r=await msalApp.acquireTokenPopup({scopes:M365.scopes});return r.accessToken;}catch(e2){return null;}}}
-async function gfetch(u,o){const t=await gtoken();if(!t)throw new Error('no token');o=o||{};o.headers=Object.assign({Authorization:'Bearer '+t},o.headers||{});return fetch('https://graph.microsoft.com/v1.0'+u,o);}
-async function driveRoot(){if(_driveRoot)return _driveRoot;const r=await gfetch('/sites/'+M365.siteHostname+':'+M365.sitePath);if(!r.ok)throw new Error('site '+r.status);const s=await r.json();_driveRoot='/sites/'+s.id+'/drive';return _driveRoot;}
-async function gput(pathInDrive,body,contentType){const u=(await driveRoot())+'/root:'+encodeURI(pathInDrive)+':/content';return gfetch(u,{method:'PUT',headers:{'Content-Type':contentType},body});}
 
 // ─── STATE ───────────────────────────────────────────
 const DEF={v:"setup",si:0,ri:0,nk:null,ak:null,info:{property:"",brand:"",date:new Date().toISOString().split("T")[0],gm:"",agm:"",rmgr:"",inspector:"",occ:"",qa:""},rat:{},notes:{},acts:{},assess:{},rooms:[{num:"",type:""},{num:"",type:""},{num:"",type:""}],fu:{d30:"",d90:"",next:""},uploaded:false};
@@ -242,10 +223,10 @@ function R(){
 function vSetup(){
   let h=`<div class="pg"><div style="text-align:center;margin-bottom:16px"><div style="font-size:22px;font-weight:800;color:var(--navy)">Property Walkthrough</div><div style="font-size:12px;color:var(--gold);font-weight:600">3923 Management · Semi-Annual</div></div>`;
   [["property","Property Name"],["brand","Brand"],["date","Date","date"],["gm","General Manager"],["agm","Accountability Partner GM"],["rmgr","Regional Manager"],["inspector","Your Name"],["occ","Today's Occupancy"],["qa","Last Walkthrough Score / Date"]].forEach(([k,l,t])=>{h+=`<div class="fl"><label>${l}</label><input type="${t||"text"}" value="${E(st.info[k])}" oninput="ui('${k}',this.value)"></div>`;});
-  h+=`<div class="authbar">${account?`<span style="color:var(--r5);font-weight:600">☁ ${E(account.username||"SharePoint")}</span><button class="authbtn out" onclick="signOut()">Sign out</button>`:m365Ready()?`<button class="authbtn" onclick="signIn()">☁ Sign in to SharePoint</button>`:`<span style="color:#bbb">Cloud upload not configured</span>`}</div>`;
+  h+=`<div style="text-align:center;margin:8px 0 2px;font-size:10px;color:#bbb">No login needed — fill it out, then tap Submit on the Export tab.</div>`;
   h+=`<button class="bt bn" style="margin-top:10px" onclick="U({v:'walk'})">Start Walkthrough →</button>`;
   h+=`<button class="bt bo" style="margin-top:8px" onclick="resetAll()">Reset All Data</button>`;
-  h+=`<div style="text-align:center;margin-top:12px;font-size:10px;color:#bbb">Data saves automatically to this device. Sign in to upload the finished report + photos to SharePoint.</div></div>`;return h;
+  h+=`<div style="text-align:center;margin-top:12px;font-size:10px;color:#bbb">Data saves automatically to this device. Tap Submit when done to send the report + photos to SharePoint.</div></div>`;return h;
 }
 
 function vWalk(){
@@ -321,9 +302,8 @@ function vExport(t,f){
   h+=`</div>`;
   h+=`<div style="font-size:13px;font-weight:700;color:var(--navy);margin-bottom:6px">Follow-Up Schedule</div>`;
   [["d30","30-Day Check-In"],["d90","90-Day Check-In"],["next","Next Full Walkthrough"]].forEach(([k,l])=>{h+=`<div class="fl"><label>${l}</label><input type="date" value="${st.fu[k]}" oninput="uf('${k}',this.value)"></div>`;});
-  if(account){h+=`<button class="bt" style="margin-top:14px;background:var(--r5);color:#fff" onclick="uploadAll()">☁ Upload to SharePoint${tp>0?" ("+tp+" photos)":""}</button>`;}
-  else if(m365Ready()){h+=`<button class="bt" style="margin-top:14px;background:var(--navy);color:#fff" onclick="signIn()">☁ Sign in to SharePoint to upload</button>`;}
-  else{h+=`<div style="margin-top:14px;font-size:11px;color:#bbb;text-align:center">Cloud upload not configured — use Download below.</div>`;}
+  h+=`<button class="bt" style="margin-top:14px;background:var(--r5);color:#fff" onclick="uploadAll()">📤 Submit to SharePoint${tp>0?" ("+tp+" photos)":""}</button>`;
+  if(!flowReady())h+=`<div style="margin-top:6px;font-size:10px;color:#bbb;text-align:center">Submit endpoint not set yet — Submit saves a JSON backup until the flow URL is added.</div>`;
   h+=`<div id="uprog"></div>`;
   if(st.uploaded)h+=`<div style="text-align:center;margin-top:8px;font-size:11px;color:var(--r5);font-weight:600">✓ Report uploaded to SharePoint</div>`;
   h+=`<div class="br" style="margin-top:8px"><button class="bt bo" style="flex:1" onclick="cpRpt()">📋 Copy</button><button class="bt bo" style="flex:1" onclick="dlRpt()">⬇ Download</button></div>`;
@@ -369,36 +349,24 @@ function safeName(s){return(s||"").replace(/[\\/:*?"<>|]/g,"-").trim();}
 // ─── UPLOAD TO SHAREPOINT ────────────────────────────
 async function uploadAll(){
   const prog=document.getElementById("uprog");
-  if(!account){toast("Sign in first");return;}
   const setBar=(w,msg)=>{if(prog)prog.innerHTML=`<div class="upload-progress"><div class="upload-bar" style="width:${w}%"></div></div><div style="text-align:center;font-size:11px;color:#888;margin-top:4px">${msg||""}</div>`;};
-  setBar(10,"Preparing upload...");
-  const payload={timestamp:new Date().toISOString(),info:st.info,ratings:st.rat,notes:st.notes,actions:st.acts,rooms:st.rooms,assessments:st.assess,followUp:st.fu,score:tot(),flagCount:fl().length,flags:fl(),sections:SEC.map(c=>({id:c.id,code:c.code,name:c.name,rating:st.rat[c.id]||null,notes:st.notes[c.id]||"",action:st.acts[c.id]||null,photoCount:pcnt(c.id)})),roomDetails:st.rooms.map((rm,i)=>{const s=rsc(i);return{num:rm.num,type:rm.type,scored:s.t,total:RI.length,score:s.s,maxScore:s.t*5,pct:s.t>0?Math.round(s.s/(s.t*5)*100):0,photoCount:pcnt("r"+i),items:RI.map((item,j)=>{const k=`r${i}-${j}`;return{item,rating:st.rat[k]||null,note:st.notes[k]||"",action:st.acts[k]||null};})};}).filter(r=>r.scored>0)};
-  const prop=safeName(st.info.property)||"Property";
-  const base=M365.folder+"/"+prop+"/"+st.info.date;
-  try{
-    setBar(30,"Uploading report + data...");
-    await gput(base+"/report.txt",genRpt(),"text/plain");
-    await gput(base+"/data.json",JSON.stringify(payload,null,2),"application/json");
-    // Photos
-    let tp=0;Object.values(photos).forEach(a=>{tp+=a.length;});
-    let done=0;
-    for(const ctx of Object.keys(photos)){
-      const arr=photos[ctx]||[];
-      for(let i=0;i<arr.length;i++){
-        try{await gput(base+"/photos/"+ctx+"_"+(i+1)+".jpg",dataURLtoBlob(arr[i].data),"image/jpeg");}catch(e){}
-        done++;setBar(30+Math.round(done/Math.max(tp,1)*65),`Uploading photos ${done}/${tp}...`);
-      }
-    }
-    setBar(100,"");
-    st.uploaded=true;sv();R();toast("✓ Uploaded to SharePoint");
-  }catch(e){
-    if(prog)prog.innerHTML="";
-    toast("⚠ Upload failed — use Download as backup");
+  const payload=buildPayload();
+  if(!flowReady()){
+    const blob=new Blob([JSON.stringify(payload,null,2)],{type:"application/json"});
+    const u=URL.createObjectURL(blob);const a=document.createElement("a");a.href=u;a.download=`walkthrough_${safeName(st.info.property)||"report"}_${st.info.date}.json`;a.click();URL.revokeObjectURL(u);
+    toast("Saved JSON (submit endpoint not set yet)");return;
   }
+  try{
+    setBar(35,`Submitting${payload.photos.length?" + "+payload.photos.length+" photos":""}...`);
+    const resp=await fetch(FLOW_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
+    setBar(100,"");
+    if(resp.ok){st.uploaded=true;sv();R();toast("✓ Submitted to SharePoint");}
+    else{toast("⚠ Submit issue ("+resp.status+") — try again or Download");}
+  }catch(e){if(prog)prog.innerHTML="";toast("⚠ Submit failed — use Download as backup");}
 }
 
 // ─── BOOT ────────────────────────────────────────────
-initM365().catch(()=>{}).finally(()=>R());
+R();
 </script>
 </body>
 </html>
