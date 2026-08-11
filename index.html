@@ -111,6 +111,17 @@ const SEC=[
 const RI=["Door, lock, hardware, peephole","First impression — smell, temp, cleanliness","Carpet / flooring condition","Walls, ceiling, baseboards","Bed — linens, mattress, pillows, frame","Furniture — nightstands, desk, dresser","TV, remote, programming","HVAC — functional, quiet, filter","Windows, blinds, curtains","Closet — hangers, iron, safe, rack","Lighting — all fixtures, outlets, USB","Bathroom — cleanliness, fixtures, function","Grout, caulking, tile condition","Amenities — toiletries, towels, dryer","Mini-fridge / coffee maker","Odors — none present","In-room collateral current"];
 const AQ=["What stood out positively?","What would embarrass us in front of an investor?","Worse since last visit?","Improved since last visit?","Where is the GM winning?","Where does the GM need support?","Biggest threat to guest satisfaction?","Fix before we leave today:"];
 
+// Weighted scoring + critical auto-fail (mirrors the weekly tool). Sections score 1–5; weighted into %.
+const WEIGHTS={ext:10,lob:20,fb:10,fit:5,cor:15,boh:20,rooms:20};
+const CRIT=[
+ {id:"hvac",t:"Guest-room HVAC — heat & A/C operational, no units down"},
+ {id:"hotwater",t:"Hot water adequate throughout"},
+ {id:"alarm",t:"Fire alarm / sprinkler system in service"},
+ {id:"extinguisher",t:"Fire extinguishers present & current"},
+ {id:"exits",t:"Emergency exits clear & unlocked; emergency lighting works"},
+ {id:"pool",t:"Pool/spa chemicals in safe range"}
+];
+
 // ─── SUBMIT TO SHAREPOINT (via Power Automate — NO sign-in) ──────────
 // The tool POSTs the report + photos to a private Power Automate flow URL;
 // the flow writes everything into the 3923 Operations SharePoint. No login for the user.
@@ -120,16 +131,17 @@ function flowReady(){return FLOW_URL && FLOW_URL.indexOf("PASTE")===-1;}
 function buildPayload(){
   const photoArr=[];
   Object.keys(photos).forEach(ctx=>{(photos[ctx]||[]).forEach((ph,i)=>{photoArr.push({name:ctx+"_"+(i+1)+".jpg",b64:(ph.data||"").split(",")[1]||""});});});
-  return {property:st.info.property,brand:st.info.brand,date:st.info.date,inspector:st.info.inspector,gm:st.info.gm,rmgr:st.info.rmgr,score:tot(),flagCount:fl().length,reportText:genRpt(),info:st.info,ratings:st.rat,notes:st.notes,actions:st.acts,rooms:st.rooms,assessments:st.assess,followUp:st.fu,flags:fl(),photos:photoArr};
+  return {property:st.info.property,brand:st.info.brand,date:st.info.date,inspector:st.info.inspector,gm:st.info.gm,rmgr:st.info.rmgr,score:tot(),crit:st.crit,flagCount:fl().length,reportText:genRpt(),info:st.info,ratings:st.rat,notes:st.notes,actions:st.acts,rooms:st.rooms,assessments:st.assess,followUp:st.fu,flags:fl(),photos:photoArr};
 }
 
 // ─── STATE ───────────────────────────────────────────
-const DEF={v:"setup",si:0,ri:0,nk:null,ak:null,info:{property:"",brand:"",date:new Date().toISOString().split("T")[0],gm:"",agm:"",rmgr:"",inspector:"",occ:"",qa:""},rat:{},notes:{},acts:{},assess:{},rooms:[{num:"",type:""},{num:"",type:""},{num:"",type:""}],fu:{d30:"",d90:"",next:""},uploaded:false};
+const DEF={v:"setup",si:0,ri:0,nk:null,ak:null,info:{property:"",brand:"",date:new Date().toISOString().split("T")[0],gm:"",agm:"",rmgr:"",inspector:"",occ:"",qa:""},rat:{},notes:{},acts:{},assess:{},rooms:[{num:"",type:""},{num:"",type:""},{num:"",type:""}],fu:{d30:"",d90:"",next:""},crit:{},uploaded:false};
 let st=JSON.parse(JSON.stringify(DEF));
 // Photos stored separately (base64 can be large, keep out of main state)
 let photos={}; // { "ext": [{data:"base64...",label:"ext_1"}], "r0": [...] }
 try{const s=localStorage.getItem("wt5");if(s)Object.assign(st,JSON.parse(s));}catch(e){}
 try{const p=localStorage.getItem("wt5p");if(p)photos=JSON.parse(p);}catch(e){}
+if(!st.crit)st.crit={};
 
 function sv(){try{localStorage.setItem("wt5",JSON.stringify(st));}catch(e){}}
 function svp(){try{localStorage.setItem("wt5p",JSON.stringify(photos));}catch(e){toast("⚠ Storage full — photos may not save");}}
@@ -139,10 +151,24 @@ function E(s){return(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/
 
 // ─── SCORING ─────────────────────────────────────────
 function rsc(i){let s=0,t=0;for(let j=0;j<RI.length;j++){const r=st.rat[`r${i}-${j}`];if(r){s+=r;t++;}}return{s,t};}
-function tot(){let s=0,mx=0;SEC.forEach(c=>{const r=st.rat[c.id];if(r){s+=r;mx+=5;}});st.rooms.forEach((_,i)=>{const c=rsc(i);if(c.t>0){s+=c.s;mx+=c.t*5;}});return{s,mx,pct:mx>0?Math.round(s/mx*100):0};}
+function roomsOverallPct(){let sum=0,n=0;st.rooms.forEach((_,i)=>{const s=rsc(i);if(s.t>0){sum+=Math.round(s.s/(s.t*5)*100);n++;}});return n>0?Math.round(sum/n):null;}
+function tot(){
+  let wsum=0,wtot=0,started=false;
+  SEC.forEach(c=>{const r=st.rat[c.id];if(r){started=true;const p=r/5*100;wsum+=p*WEIGHTS[c.id];wtot+=WEIGHTS[c.id];}});
+  const rp=roomsOverallPct();if(rp!==null){started=true;wsum+=rp*WEIGHTS.rooms;wtot+=WEIGHTS.rooms;}
+  const pct=wtot>0?Math.round(wsum/wtot):0;
+  const autoFails=[];
+  if(st.crit)CRIT.forEach(c=>{if(st.crit[c.id]==="fail")autoFails.push("Critical safety check failed — "+c.t);});
+  let roomFails=0;st.rooms.forEach((_,i)=>{const s=rsc(i);if(s.t>0&&Math.round(s.s/(s.t*5)*100)<60)roomFails++;});
+  if(roomFails>=2)autoFails.push(roomFails+" guest rooms scored below 60% (Unsatisfactory)");
+  const rating=autoFails.length?"fail":pct>=90?"sat":pct>=80?"needs":"unsat";
+  return{pct,started,autoFails,rating};
+}
 function fl(){const f=[];SEC.forEach(c=>{const r=st.rat[c.id];if(r&&r<=3)f.push({k:c.id,sec:c.name,code:c.code,item:c.name,r,note:st.notes[c.id]||"",act:st.acts[c.id]||{}});});st.rooms.forEach((_,i)=>{RI.forEach((item,j)=>{const k=`r${i}-${j}`,r=st.rat[k];if(r&&r<=3)f.push({k,sec:"Room "+(st.rooms[i].num||i+1),code:`R${i+1}.${j+1}`,item,r,note:st.notes[k]||"",act:st.acts[k]||{}});});});return f;}
-function pc(p){return p>=90?"var(--r5)":p>=75?"var(--r4)":p>=60?"var(--r3)":"var(--r1)";}
-function pl(p){return p>=90?"Excellent":p>=75?"Good":p>=60?"Fair":"Unsatisfactory";}
+function pc(p){return p>=90?"var(--r5)":p>=80?"var(--r4)":p>=60?"var(--r3)":"var(--r1)";}
+function pl(p){return p>=90?"Satisfactory":p>=80?"Needs Improvement":"Unsatisfactory";}
+function rLabel(r){return r==="sat"?"Satisfactory":r==="needs"?"Needs Improvement":r==="fail"?"AUTOMATIC FAIL":"Unsatisfactory";}
+function setCrit(id,v){if(!st.crit)st.crit={};st.crit[id]=st.crit[id]===v?undefined:v;sv();R();}
 function pcnt(secId){return(photos[secId]||[]).length;}
 
 // ─── PHOTO HANDLING ──────────────────────────────────
@@ -205,7 +231,7 @@ function R(){
   const ce=document.querySelector(".cnt");const sy=ce?ce.scrollTop:0;
   const t=tot(),f=fl();let h="";
   if(st.v!=="setup"){
-    h+=`<div class="topbar"><div class="tr"><div><div class="tn">${E(st.info.property)||"Property Walkthrough"}</div><div class="tb">3923 Management</div></div><div><div class="ts" style="color:${t.mx>0?pc(t.pct):"#666"}">${t.mx>0?t.pct+"%":"—"}</div><div class="tss">${t.mx>0?t.s+"/"+t.mx:"Start scoring"}</div></div></div>`;
+    h+=`<div class="topbar"><div class="tr"><div><div class="tn">${E(st.info.property)||"Property Walkthrough"}</div><div class="tb">3923 Management</div></div><div><div class="ts" style="color:${!t.started?"#666":t.autoFails.length?"var(--r1)":pc(t.pct)}">${!t.started?"—":t.autoFails.length?"⛔":t.pct+"%"}</div><div class="tss">${!t.started?"Start scoring":t.autoFails.length?"AUTO-FAIL":rLabel(t.rating)}</div></div></div>`;
     if(st.v==="walk"){h+=`<div class="chips">`;SEC.forEach((c,i)=>{const r=st.rat[c.id];h+=`<button class="ch${st.si===i?" a":""}${r?" d":""}" onclick="U({si:${i}})">${c.code}${r?" ✓":""}</button>`;});h+=`</div>`;}
     h+=`</div>`;
   }
@@ -242,6 +268,11 @@ function vWalk(){
   h+=`<div style="margin-top:8px"><div class="sl">Comments / Action Items</div><textarea rows="3" placeholder="What did you see? What needs to happen?" oninput="sn('${c.id}',this.value)" style="width:100%;padding:8px;border-radius:7px;border:1px solid #ddd;font-size:13px;box-sizing:border-box;resize:vertical">${E(st.notes[c.id]||"")}</textarea></div>`;
   h+=`<div style="margin-top:8px"><button class="pb${ph>0?" has":""}" onclick="takePhoto('${c.id}')">📷 ${ph>0?"Add More ("+ph+")":"Take Photo"}</button></div>`;
   h+=photoThumbs(c.id);
+  if(c.id==="boh"){
+    h+=`<div class="sa" style="background:#fff5f5;border-top:2px solid var(--r1)"><div class="sl" style="color:var(--r1)">⛔ Critical Safety Checks — any Fail = automatic property fail</div>`;
+    CRIT.forEach(cc=>{const cv=st.crit[cc.id];h+=`<div style="padding:6px 0;border-bottom:1px solid #f5f5f5"><div style="font-size:12px;margin-bottom:4px">${E(cc.t)}</div><div style="display:flex;gap:5px">`;[["pass","Pass","var(--r5)"],["fail","Fail","var(--r1)"],["na","N/A","#999"]].forEach(([v,l,col])=>{h+=`<button class="tg" style="${cv===v?"background:"+col+";border-color:"+col+";color:#fff":""}" onclick="setCrit('${cc.id}','${v}')">${l}</button>`;});h+=`</div></div>`;});
+    h+=`</div>`;
+  }
   h+=`</div>`;
   h+=`<div class="br" style="padding:12px">`;
   if(st.si>0)h+=`<button class="bt bo" style="flex:1" onclick="U({si:${st.si-1}})">← Prev</button>`;
@@ -295,7 +326,9 @@ function vPlan(f){
 function vExport(t,f){
   let tp=0;Object.values(photos).forEach(a=>{tp+=a.length;});
   let h=`<div class="pg"><div style="font-size:16px;font-weight:700;color:var(--navy);margin-bottom:14px">Export Report</div>`;
-  h+=`<div class="ec"><div style="font-size:12px;color:var(--lgold);margin-bottom:3px">${E(st.info.property)||"Property"}</div><div style="font-size:42px;font-weight:800;color:${pc(t.pct)}">${t.pct}%</div><div style="font-size:13px;color:#ccc">${t.s} / ${t.mx} — ${pl(t.pct)}</div><div style="font-size:11px;color:#999;margin-top:3px">${f.length} action items · ${tp} photos</div></div>`;
+  const af=t.autoFails.length>0;
+  h+=`<div class="ec"><div style="font-size:12px;color:var(--lgold);margin-bottom:3px">${E(st.info.property)||"Property"}</div><div style="font-size:42px;font-weight:800;color:${af?"var(--r1)":pc(t.pct)}">${af?"FAIL":t.pct+"%"}</div><div style="font-size:13px;color:#ccc">${af?t.pct+"% weighted — automatic fail":"Weighted score — "+rLabel(t.rating)}</div><div style="font-size:11px;color:#999;margin-top:3px">${f.length} action items · ${tp} photos</div></div>`;
+  if(af){h+=`<div style="background:#fef2f2;border:1px solid var(--r1);border-radius:8px;padding:10px;margin-bottom:14px"><div style="font-size:12px;font-weight:700;color:var(--r1);margin-bottom:4px">⛔ Automatic Fail — ${t.autoFails.length} trigger${t.autoFails.length>1?"s":""}</div>`;t.autoFails.forEach(a=>{h+=`<div style="font-size:11px;color:#991b1b;padding:1px 0">• ${E(a)}</div>`;});h+=`</div>`;}
   h+=`<div style="font-size:13px;font-weight:700;color:var(--navy);margin-bottom:6px">Section Scores</div><div style="margin-bottom:14px">`;
   SEC.forEach(c=>{const r=st.rat[c.id],ph=pcnt(c.id);h+=`<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #f0f0f0;font-size:12px"><span>${c.code}. ${c.name}${ph>0?" 📷"+ph:""}</span>${r?`<span style="font-weight:700;color:${pc(r*20)}">${r}/5</span>`:`<span style="color:#ccc">—</span>`}</div>`;});
   st.rooms.forEach((rm,i)=>{const s=rsc(i);if(s.t>0){const p=Math.round(s.s/(s.t*5)*100),ph=pcnt(`r${i}`);h+=`<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #f0f0f0;font-size:12px"><span>Room ${rm.num||i+1} (${rm.type||"—"})${ph>0?" 📷"+ph:""}</span><span style="font-weight:700;color:${pc(p)}">${p}%</span></div>`;}});
@@ -332,7 +365,10 @@ function resetAll(){if(confirm("Reset ALL data including photos? This cannot be 
 // ─── REPORT GEN ──────────────────────────────────────
 function genRpt(){
   const t=tot(),f=fl();
-  let r=`3923 MANAGEMENT — PROPERTY WALKTHROUGH\n${"=".repeat(50)}\n\nProperty: ${st.info.property}\nBrand: ${st.info.brand}\nDate: ${st.info.date}\nGM: ${st.info.gm}\nAccountability GM: ${st.info.agm}\nRegional Mgr: ${st.info.rmgr}\nInspector: ${st.info.inspector}\nOccupancy: ${st.info.occ}\nLast Walkthrough: ${st.info.qa}\n\nOVERALL SCORE: ${t.s}/${t.mx} (${t.pct}%) — ${pl(t.pct)}\n${"-".repeat(50)}\n\nSECTION SCORES\n`;
+  let r=`3923 MANAGEMENT — PROPERTY WALKTHROUGH\n${"=".repeat(50)}\n\nProperty: ${st.info.property}\nBrand: ${st.info.brand}\nDate: ${st.info.date}\nGM: ${st.info.gm}\nAccountability GM: ${st.info.agm}\nRegional Mgr: ${st.info.rmgr}\nInspector: ${st.info.inspector}\nOccupancy: ${st.info.occ}\nLast Walkthrough: ${st.info.qa}\n\nOVERALL SCORE: ${t.pct}% (weighted) — ${t.autoFails.length?"AUTOMATIC FAIL":rLabel(t.rating)}\n`;
+  if(t.autoFails.length){r+=`\n⛔ AUTO-FAIL TRIGGERS\n`;t.autoFails.forEach(a=>{r+=`  • ${a}\n`;});}
+  r+=`\nCRITICAL SAFETY CHECKS\n`;CRIT.forEach(c=>{const v=st.crit?st.crit[c.id]:null;r+=`  [${v?v.toUpperCase():"—"}] ${c.t}\n`;});
+  r+=`${"-".repeat(50)}\n\nSECTION SCORES\n`;
   SEC.forEach(c=>{const v=st.rat[c.id];r+=`  ${c.code}. ${c.name}: ${v?v+"/5":"—"}\n`;if(st.notes[c.id])r+=`     Notes: ${st.notes[c.id]}\n`;const a=st.acts[c.id];if(a&&a.bucket)r+=`     Timeline: ${a.bucket}\n`;r+=`     Photos: ${pcnt(c.id)}\n`;});
   r+=`\nROOM SCORES\n`;
   st.rooms.forEach((rm,i)=>{const s=rsc(i);if(s.t>0){const p=Math.round(s.s/(s.t*5)*100);r+=`\n  Room ${rm.num||i+1} (${rm.type||"—"}): ${s.s}/${s.t*5} (${p}%)\n`;RI.forEach((item,j)=>{const k=`r${i}-${j}`,rv=st.rat[k];if(rv){r+=`    R${i+1}.${j+1} [${rv}] ${item}`;if(st.notes[k])r+=` — ${st.notes[k]}`;const a=st.acts[k];if(a&&a.bucket)r+=` [${a.bucket}${a.owner?" "+a.owner:""}]`;r+="\n";}});r+=`    Photos: ${pcnt("r"+i)}\n`;}});
